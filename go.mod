@@ -10,6 +10,7 @@ require (
 	github.com/gofiber/websocket/v2 v2.2.1
 	github.com/joho/godotenv v1.5.1
 	github.com/spf13/viper v1.19.0
+	github.com/streadway/amqp v1.1.0
 	google.golang.org/grpc v1.65.0
 )
 

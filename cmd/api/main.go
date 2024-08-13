@@ -6,6 +6,7 @@ import (
 	"log"
 	"websocket-service/internal/config"
 	"websocket-service/internal/delivery/websocket/route"
+	"websocket-service/internal/utils"
 )
 
 func main() {
@@ -20,10 +21,13 @@ func main() {
 
 	app.Use(logger.New())
 
+	rmq, err := utils.NewRabbitMQ(cfg.RabbitMQAddress)
+	if err != nil {
+		log.Fatalf("Could not connect to RabbitMQ: %v", err)
+	}
+	cfg.RabbitMQUtils = rmq
 	// Setup routes
 	route.SetupRoutes(app, cfg)
-
-	// Setup error handler middleware
 
 	// Start server
 	log.Fatal(app.Listen(cfg.ServerAddress))

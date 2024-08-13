@@ -1,14 +1,15 @@
 package websocket
 
 import (
-	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/websocket/v2"
 	"log"
 	"strconv"
 	e "websocket-service/internal/exception"
 	"websocket-service/internal/model"
 	"websocket-service/internal/service"
 	"websocket-service/internal/utils"
+
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/websocket/v2"
 )
 
 type WebSocketController struct {
@@ -52,7 +53,7 @@ func (controller *WebSocketController) Get(c *fiber.Ctx) error {
 	return fiber.ErrUpgradeRequired
 }
 
-func (controller *WebSocketController) Broadcast(c *fiber.Ctx) error {
+func (controller *WebSocketController) job(c *fiber.Ctx) error {
 	var request model.MessageRequest
 	if err := c.BodyParser(&request); err != nil {
 		return e.Validation(err)
@@ -61,6 +62,6 @@ func (controller *WebSocketController) Broadcast(c *fiber.Ctx) error {
 	//userIds := model.DummyConversation[request.ConversationId]
 	//message := []byte(request.Message)
 
-	//controller.manager.BroadcastMessageToUsers(userIds, message)
-	return c.SendString("Broadcast sent")
+	//controller.manager.jobMessageToUsers(userIds, message)
+	return c.SendString("job sent")
 }

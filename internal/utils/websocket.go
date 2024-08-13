@@ -12,7 +12,7 @@ import (
 
 type WebSocketManager struct {
 	clients    map[uint32][]*websocket.Conn
-	broadcast  chan *BroadcastMessage
+	job        chan *jobMessage
 	register   chan *WebSocketConnInfo
 	unregister chan *WebSocketConnInfo
 	mu         sync.Mutex
@@ -23,7 +23,7 @@ type WebSocketConnInfo struct {
 	Conn   *websocket.Conn
 }
 
-type BroadcastMessage struct {
+type jobMessage struct {
 	UserIds []uint32
 	Message []byte
 }
@@ -31,7 +31,7 @@ type BroadcastMessage struct {
 func NewWebSocketManager() *WebSocketManager {
 	return &WebSocketManager{
 		clients:    make(map[uint32][]*websocket.Conn),
-		broadcast:  make(chan *BroadcastMessage),
+		job:        make(chan *jobMessage),
 		register:   make(chan *WebSocketConnInfo),
 		unregister: make(chan *WebSocketConnInfo),
 	}
@@ -44,8 +44,8 @@ func (manager *WebSocketManager) Run() {
 			manager.addClient(connInfo.UserId, connInfo.Conn)
 		case connInfo := <-manager.unregister:
 			manager.removeClient(uint32(connInfo.UserId), connInfo.Conn)
-		case broadcastMsg := <-manager.broadcast:
-			manager.broadcastMessage(broadcastMsg)
+		case jobMsg := <-manager.job:
+			manager.jobMessage(jobMsg)
 		}
 	}
 }
@@ -78,15 +78,15 @@ func (manager *WebSocketManager) removeClient(userId uint32, conn *websocket.Con
 	}
 }
 
-func (manager *WebSocketManager) broadcastMessage(broadcastMsg *BroadcastMessage) {
+func (manager *WebSocketManager) jobMessage(jobMsg *jobMessage) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
-	log.Printf("Broadcasting message to %d users: %s", len(broadcastMsg.UserIds), string(broadcastMsg.Message))
-	for _, userId := range broadcastMsg.UserIds {
+	log.Printf("jobing message to %d users: %s", len(jobMsg.UserIds), string(jobMsg.Message))
+	for _, userId := range jobMsg.UserIds {
 		if conns, ok := manager.clients[userId]; ok {
 			for _, conn := range conns {
-				if err := conn.WriteMessage(websocket.TextMessage, broadcastMsg.Message); err != nil {
+				if err := conn.WriteMessage(websocket.TextMessage, jobMsg.Message); err != nil {
 					log.Printf("Failed to send message to user %d at %s: %v", userId, conn.RemoteAddr().String(), err)
 					manager.removeClient(userId, conn)
 				}
@@ -137,12 +137,21 @@ func (manager *WebSocketManager) WebSocketEndpoint(c *websocket.Conn, userId int
 
 		log.Printf("Received message from user %d: %s", userId, message)
 
-		manager.BroadcastMessageChat(userIds, request.Message)
-		manager.BroadcastMessageNotification(userIds, request.Message)
+		manager.JobMessageChat(userIds, request.Message)
+		manager.JobMessageNotification(userIds, request.Message)
 	}
 }
 
-func (manager *WebSocketManager) BroadcastMessageChat(userIds []uint32, message string) {
+func (manager *WebSocketManager) BroadcastNotification(message string) {
+	var userIds []uint32
+	for userId := range manager.clients {
+		userIds = append(userIds, userId)
+	}
+
+	manager.JobMessageNotification(userIds, message)
+}
+
+func (manager *WebSocketManager) JobMessageChat(userIds []uint32, message string) {
 	response := model.MessageResponse{
 		MessageType: model.MessageTypeChat,
 		Message:     message,
@@ -153,13 +162,13 @@ func (manager *WebSocketManager) BroadcastMessageChat(userIds []uint32, message 
 		return
 	}
 
-	manager.broadcast <- &BroadcastMessage{
+	manager.job <- &jobMessage{
 		UserIds: userIds,
 		Message: responseByte,
 	}
 }
 
-func (manager *WebSocketManager) BroadcastMessageNotification(userIds []uint32, message string) {
+func (manager *WebSocketManager) JobMessageNotification(userIds []uint32, message string) {
 	response := model.MessageResponse{
 		MessageType: model.MessageTypeNotification,
 		Message:     message,
@@ -170,15 +179,15 @@ func (manager *WebSocketManager) BroadcastMessageNotification(userIds []uint32, 
 		return
 	}
 
-	manager.broadcast <- &BroadcastMessage{
+	manager.job <- &jobMessage{
 		UserIds: userIds,
 		Message: responseByte,
 	}
 
 }
 
-func (manager *WebSocketManager) BroadcastMessageToUsers(userIds []uint32, message []byte) {
-	manager.broadcast <- &BroadcastMessage{
+func (manager *WebSocketManager) jobMessageToUsers(userIds []uint32, message []byte) {
+	manager.job <- &jobMessage{
 		UserIds: userIds,
 		Message: message,
 	}
