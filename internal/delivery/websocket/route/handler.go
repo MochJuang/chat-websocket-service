@@ -1,36 +1,38 @@
 package route
 
 import (
+	"google.golang.org/grpc"
 	"log"
-	"strconv"
 	"websocket-service/internal/config"
 	wsdelivery "websocket-service/internal/delivery/websocket"
+	"websocket-service/internal/service"
 	"websocket-service/internal/utils"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/websocket/v2"
+	grpcrepository "websocket-service/internal/repository/grpc"
 )
 
 func SetupRoutes(app *fiber.App, cfg config.Config) {
+
+	conn, err := grpc.Dial(cfg.GrpcServer, grpc.WithInsecure())
+	if err != nil {
+		log.Fatalf("Failed to connect to gRPC server: %v", err)
+	}
+	//defer conn.Close()
+
+	cfg.GrpcClient = conn
 
 	manager := utils.NewWebSocketManager()
 
 	go manager.Run()
 
-	websocketController := wsdelivery.NewWebSocketController(manager)
+	chatRepository := grpcrepository.NewChatRepository(cfg.GrpcClient)
+	chatService := service.NewChatService(chatRepository)
 
-	app.Use("/ws/:userId", websocket.New(func(c *websocket.Conn) {
-		userIdStr := c.Params("userId")
-		userId, err := strconv.Atoi(userIdStr)
+	websocketController := wsdelivery.NewWebSocketController(manager, chatService)
 
-		if err != nil {
-			log.Printf("Invalid userId: %s", userIdStr)
-			return
-		}
-
-		log.Println("New connection for user", userId)
-		manager.WebSocketEndpoint(c, userId)
-	}))
+	app.Use("/ws/:userId", websocket.New(websocketController.Connect))
 
 	app.Get("/ws/:userId", websocketController.Get)
 

@@ -11,7 +11,7 @@ import (
 )
 
 type WebSocketManager struct {
-	clients    map[int][]*websocket.Conn
+	clients    map[uint32][]*websocket.Conn
 	broadcast  chan *BroadcastMessage
 	register   chan *WebSocketConnInfo
 	unregister chan *WebSocketConnInfo
@@ -24,13 +24,13 @@ type WebSocketConnInfo struct {
 }
 
 type BroadcastMessage struct {
-	UserIds []int
+	UserIds []uint32
 	Message []byte
 }
 
 func NewWebSocketManager() *WebSocketManager {
 	return &WebSocketManager{
-		clients:    make(map[int][]*websocket.Conn),
+		clients:    make(map[uint32][]*websocket.Conn),
 		broadcast:  make(chan *BroadcastMessage),
 		register:   make(chan *WebSocketConnInfo),
 		unregister: make(chan *WebSocketConnInfo),
@@ -43,7 +43,7 @@ func (manager *WebSocketManager) Run() {
 		case connInfo := <-manager.register:
 			manager.addClient(connInfo.UserId, connInfo.Conn)
 		case connInfo := <-manager.unregister:
-			manager.removeClient(connInfo.UserId, connInfo.Conn)
+			manager.removeClient(uint32(connInfo.UserId), connInfo.Conn)
 		case broadcastMsg := <-manager.broadcast:
 			manager.broadcastMessage(broadcastMsg)
 		}
@@ -54,11 +54,11 @@ func (manager *WebSocketManager) addClient(userId int, conn *websocket.Conn) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
-	manager.clients[userId] = append(manager.clients[userId], conn)
+	manager.clients[uint32(userId)] = append(manager.clients[uint32(userId)], conn)
 	log.Printf("New connection for user %d: %s", userId, conn.RemoteAddr().String())
 }
 
-func (manager *WebSocketManager) removeClient(userId int, conn *websocket.Conn) {
+func (manager *WebSocketManager) removeClient(userId uint32, conn *websocket.Conn) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
@@ -67,7 +67,7 @@ func (manager *WebSocketManager) removeClient(userId int, conn *websocket.Conn) 
 			if c == conn {
 				manager.clients[userId] = append(conns[:i], conns[i+1:]...)
 				conn.Close()
-				log.Printf("Connection closed for user %d: %s", userId, conn.RemoteAddr().String())
+				log.Printf("Connection closed for user %d", userId)
 				break
 			}
 		}
@@ -107,7 +107,7 @@ func (manager *WebSocketManager) HandleWebSocket(c *fiber.Ctx) error {
 	return fiber.ErrUpgradeRequired
 }
 
-func (manager *WebSocketManager) WebSocketEndpoint(c *websocket.Conn, userId int) {
+func (manager *WebSocketManager) WebSocketEndpoint(c *websocket.Conn, userId int, callback func(userId int, request model.MessageRequest) ([]uint32, error)) {
 	connInfo := &WebSocketConnInfo{
 		UserId: userId,
 		Conn:   c,
@@ -126,29 +126,58 @@ func (manager *WebSocketManager) WebSocketEndpoint(c *websocket.Conn, userId int
 		err = json.Unmarshal(message, &request)
 		if err != nil {
 			log.Printf("request format invalid %d: %v", userId, err)
-			break
+			continue
+		}
+
+		userIds, err := callback(userId, request)
+		if err != nil {
+			log.Printf("Failed to read message: %v", err)
+			continue
 		}
 
 		log.Printf("Received message from user %d: %s", userId, message)
 
-		response := model.MessageResponse{
-			MessageType: model.MessageTypeChat,
-			Message:     request.Message,
-		}
-		responseByte, err := json.Marshal(response)
-		if err != nil {
-			log.Printf("Failed to marshal response: %v", err)
-			break
-		}
-
-		manager.broadcast <- &BroadcastMessage{
-			UserIds: model.DummyConversation[request.ConversationId],
-			Message: responseByte,
-		}
+		manager.BroadcastMessageChat(userIds, request.Message)
+		manager.BroadcastMessageNotification(userIds, request.Message)
 	}
 }
 
-func (manager *WebSocketManager) BroadcastMessageToUsers(userIds []int, message []byte) {
+func (manager *WebSocketManager) BroadcastMessageChat(userIds []uint32, message string) {
+	response := model.MessageResponse{
+		MessageType: model.MessageTypeChat,
+		Message:     message,
+	}
+	responseByte, err := json.Marshal(response)
+	if err != nil {
+		log.Printf("Failed to marshal response: %v", err)
+		return
+	}
+
+	manager.broadcast <- &BroadcastMessage{
+		UserIds: userIds,
+		Message: responseByte,
+	}
+}
+
+func (manager *WebSocketManager) BroadcastMessageNotification(userIds []uint32, message string) {
+	response := model.MessageResponse{
+		MessageType: model.MessageTypeNotification,
+		Message:     message,
+	}
+	responseByte, err := json.Marshal(response)
+	if err != nil {
+		log.Printf("Failed to marshal response: %v", err)
+		return
+	}
+
+	manager.broadcast <- &BroadcastMessage{
+		UserIds: userIds,
+		Message: responseByte,
+	}
+
+}
+
+func (manager *WebSocketManager) BroadcastMessageToUsers(userIds []uint32, message []byte) {
 	manager.broadcast <- &BroadcastMessage{
 		UserIds: userIds,
 		Message: message,
